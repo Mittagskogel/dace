@@ -258,6 +258,122 @@ end subroutine main
     assert d[0] == 65
 
 
+def test_fortran_frontend_global_array():
+    """Check whether a constant array is properly recorded in global_data and initialized in the SDFG."""
+    sources, main = SourceCodeBuilder().add_file("""
+module lib
+  implicit none
+  integer :: ind(3) = [3, 4, 5]
+contains
+  subroutine foo(d)
+    integer, dimension(6), intent(inout) :: d
+    integer :: idx
+
+    do idx=1,3
+      d(idx) = ind(idx)
+    end do
+  end subroutine
+end module lib
+
+subroutine main(d)
+  use lib
+  implicit none
+  integer, dimension(6) :: d
+  call foo(d)
+end subroutine main
+""").check_with_gfortran().get()
+    g = create_singular_sdfg_from_string(sources, 'main')
+    g.validate()
+    g.simplify()
+    d = np.full([6], 0, order="F", dtype=np.int32)
+    g(d=d, global_data=[4,5,6])
+    print(d)
+    assert(d[2] == 0)
+    assert(d[4] == 2)
+
+
+def test_fortran_frontend_global_parameter_array():
+    """Check whether a parameter array is properly recorded in global_data and initialized in the SDFG."""
+    sources, main = SourceCodeBuilder().add_file("""
+module lib
+  implicit none
+  integer, parameter :: ind(3) = [3, 4, 5]
+contains
+  subroutine foo(d)
+    integer, dimension(6), intent(inout) :: d
+    integer :: idx
+
+    do idx=1,3
+      d(idx) = ind(idx)
+    end do
+  end subroutine
+end module lib
+
+subroutine main(d)
+  use lib
+  implicit none
+  integer, dimension(6) :: d
+  call foo(d)
+end subroutine main
+""").check_with_gfortran().get()
+    g = create_singular_sdfg_from_string(sources, 'main')
+    g.validate()
+    g.simplify()
+    d = np.full([6], 0, order="F", dtype=np.int32)
+    g(d=d)
+    print(d)
+    assert(d[2] == 0)
+    assert(d[4] == 2)
+
+
+def test_fortran_frontend_const_indexing_array():
+    """Check whether a const array can be used to index another array."""
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  !use lib
+  implicit none
+  integer, dimension(6) :: d
+  integer, dimension(3) :: ind = [4, 5, 6]
+  integer :: idx
+  do idx=1,3
+    d(ind(idx)) = 2
+  end do
+end subroutine main
+""").check_with_gfortran().get()
+    g = create_singular_sdfg_from_string(sources, 'main')
+    g.validate()
+    g.simplify()
+    d = np.full([6], 0, order="F", dtype=np.int32)
+    g(d=d)
+    print(d)
+    assert(d[2] == 0)
+    assert(d[4] == 2)
+
+
+def test_fortran_frontend_const_array_idx_normalization():
+    """Check whether const indexing array has properly normalized indices."""
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  !use lib
+  implicit none
+  integer, dimension(-1:4) :: d
+  integer, dimension(4:6) :: ind = [4, 5, 6]
+  integer :: idx
+  do idx=1,3
+    d(idx) = ind(idx+3)
+  end do
+end subroutine main
+""").check_with_gfortran().get()
+    g = create_singular_sdfg_from_string(sources, 'main')
+    g.validate()
+    g.simplify()
+    d = np.full([6], 0, order="F", dtype=np.int32)
+    g(d=d)
+    print(d)
+    assert(d[2] == 4)
+    assert(d[4] == 6)
+
+
 if __name__ == "__main__":
     test_fortran_frontend_array_3dmap()
     test_fortran_frontend_array_access()
@@ -266,3 +382,7 @@ if __name__ == "__main__":
     test_fortran_frontend_array_multiple_ranges_with_symbols()
     test_fortran_frontend_twoconnector()
     test_fortran_frontend_memlet_in_map_test()
+    test_fortran_frontend_global_array()
+    test_fortran_frontend_global_parameter_array()
+    test_fortran_frontend_const_indexing_array()
+    test_fortran_frontend_const_array_idx_normalization()

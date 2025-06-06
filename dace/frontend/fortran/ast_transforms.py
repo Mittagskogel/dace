@@ -1164,6 +1164,10 @@ class ModuleVarsDeclarations(NodeVisitor):
         var_name = node.name
         self.scope_vars[var_name] = node
 
+    def visit_Symbol_Array_Decl_Node(self, node: ast_internal_classes.Symbol_Array_Decl_Node):
+        var_name = node.name
+        self.scope_vars[var_name] = node
+
 
 class ScopeVarsDeclarations(NodeVisitor):
     """
@@ -2015,7 +2019,7 @@ class ReplaceArrayConstructor(NodeTransformer):
             for i in range(len(node.rval.value_list)):
                 assigns.append(ast_internal_classes.BinOp_Node(
                     lval=ast_internal_classes.Array_Subscript_Node(name=node.lval, indices=[
-                        ast_internal_classes.Int_Literal_Node(value=str(i + 1))], type=node.type, parent=node.parent),
+                        ast_internal_classes.Int_Literal_Node(value=str(i))], type=node.type, parent=node.parent),
                     op="=", rval=node.rval.value_list[i], line_number=node.line_number, parent=node.parent,
                     typ=node.type))
             return ast_internal_classes.Execution_Part_Node(execution=assigns)
