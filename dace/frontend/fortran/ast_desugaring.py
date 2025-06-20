@@ -691,8 +691,16 @@ def _const_eval_basic_type(expr: Base, alias_map: SPEC_TABLE) -> Optional[NUMPY_
             if all(isinstance(a, (np.float32, np.float64)) for a in avals):
                 return np.arctan(*avals)
         elif intr.string == 'SELECTED_REAL_KIND':
-            p, r = args
-            p, r = _const_eval_basic_type(p, alias_map), _const_eval_basic_type(r, alias_map)
+            # Probably this is not correct as it would need to detect which arg was passed.
+            if len(args) == 1:
+                p, = args
+                p = _const_eval_basic_type(p, alias_map)
+                r = np.int32(0)
+            elif len(args) == 2:
+                p, r = args
+                p, r = _const_eval_basic_type(p, alias_map), _const_eval_basic_type(r, alias_map)
+            else:
+                raise NotImplementedError("Can only handle one or two args for SELECTED_REAL_KIND.")
             assert isinstance(p, np.int32) and isinstance(r, np.int32)
             return np.int32(_eval_selected_real_kind(p, r))
         elif intr.string == 'SELECTED_INT_KIND':
