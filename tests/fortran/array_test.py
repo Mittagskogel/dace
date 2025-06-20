@@ -258,46 +258,53 @@ end subroutine main
     assert d[0] == 65
 
 
-def test_fortran_frontend_global_array():
-    """Check whether a constant array is properly recorded in global_data and initialized in the SDFG."""
+def test_fortran_frontend_array_assignment():
     sources, main = SourceCodeBuilder().add_file("""
-module lib
-  implicit none
-  integer :: ind(3) = [3, 4, 5]
-contains
-  subroutine foo(d)
-    integer, dimension(6), intent(inout) :: d
-    integer :: idx
-
-    do idx=1,3
-      d(idx) = ind(idx)
-    end do
-  end subroutine
-end module lib
-
 subroutine main(d)
-  use lib
   implicit none
-  integer, dimension(6) :: d
-  call foo(d)
+  integer, dimension(3) :: d
+  d = [3, 4, 5]
 end subroutine main
 """).check_with_gfortran().get()
     g = create_singular_sdfg_from_string(sources, 'main')
     g.validate()
     g.simplify()
-    d = np.full([6], 0, order="F", dtype=np.int32)
-    g(d=d, global_data=[4,5,6])
+    d = np.full([3], 0, order="F", dtype=np.int32)
+    g(d=d)
     print(d)
-    assert(d[2] == 0)
-    assert(d[4] == 2)
+    assert(d[0] == 3)
+    assert(d[2] == 5)
 
 
-def test_fortran_frontend_global_parameter_array():
-    """Check whether a parameter array is properly recorded in global_data and initialized in the SDFG."""
+def test_fortran_frontend_type_array_assignment():
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  implicit none
+  integer, dimension(3) :: d
+  type :: t_arr
+    integer, dimension(3) :: arr
+  end type
+  type(t_arr) :: a
+  a % arr = [3, 4, 5]
+  d = a % arr
+end subroutine main
+""").check_with_gfortran().get()
+    g = create_singular_sdfg_from_string(sources, 'main')
+    g.validate()
+    g.simplify()
+    d = np.full([3], 0, order="F", dtype=np.int32)
+    g(d=d)
+    print(d)
+    assert(d[0] == 3)
+    assert(d[2] == 5)
+
+
+def test_fortran_frontend_global_array():
+    """Check whether a constant array is properly recorded in global_data and initialized in the SDFG."""
     sources, main = SourceCodeBuilder().add_file("""
 module lib
   implicit none
-  integer, parameter :: ind(3) = [3, 4, 5]
+  integer, dimension(3) :: ind = [3, 4, 5]
 contains
   subroutine foo(d)
     integer, dimension(6), intent(inout) :: d
@@ -322,15 +329,54 @@ end subroutine main
     d = np.full([6], 0, order="F", dtype=np.int32)
     g(d=d)
     print(d)
-    assert(d[2] == 0)
-    assert(d[4] == 2)
+    assert(d[0] == 3)
+    assert(d[2] == 5)
+    assert(d[4] == 0)
+
+
+def test_fortran_frontend_global_parameter_array():
+    """Check whether a parameter array is properly recorded in global_data and initialized in the SDFG."""
+    sources, main = SourceCodeBuilder().add_file("""
+module lib
+  implicit none
+  integer, parameter, dimension(3) :: ind = [3, 4, 5]
+  integer, parameter :: jnd(3) = [8, 7, 6]
+contains
+  subroutine foo(d)
+    integer, dimension(6), intent(inout) :: d
+    integer :: idx
+
+    do idx=1,3
+      d(idx) = ind(idx)
+    end do
+    do idx=1,3
+      d(idx+3) = jnd(idx)
+    end do
+  end subroutine
+end module lib
+
+subroutine main(d)
+  use lib
+  implicit none
+  integer, dimension(6) :: d
+  call foo(d)
+end subroutine main
+""").check_with_gfortran().get()
+    g = create_singular_sdfg_from_string(sources, 'main')
+    g.validate()
+    g.simplify()
+    d = np.full([6], 0, order="F", dtype=np.int32)
+    g(d=d)
+    print(d)
+    assert(d[0] == 3)
+    assert(d[2] == 5)
+    assert(d[4] == 7)
 
 
 def test_fortran_frontend_const_indexing_array():
     """Check whether a const array can be used to index another array."""
     sources, main = SourceCodeBuilder().add_file("""
 subroutine main(d)
-  !use lib
   implicit none
   integer, dimension(6) :: d
   integer, dimension(3) :: ind = [4, 5, 6]
@@ -354,7 +400,6 @@ def test_fortran_frontend_const_array_idx_normalization():
     """Check whether const indexing array has properly normalized indices."""
     sources, main = SourceCodeBuilder().add_file("""
 subroutine main(d)
-  !use lib
   implicit none
   integer, dimension(-1:4) :: d
   integer, dimension(4:6) :: ind = [4, 5, 6]

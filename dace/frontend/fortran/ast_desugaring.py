@@ -29,7 +29,7 @@ from fparser.two.Fortran2003 import Program_Stmt, Module_Stmt, Function_Stmt, Su
     Deallocate_Stmt, Close_Stmt, Goto_Stmt, Continue_Stmt, Format_Stmt, Stmt_Function_Stmt, Internal_Subprogram_Part, \
     Private_Components_Stmt, Generic_Spec, Language_Binding_Spec, Type_Attr_Spec, Suffix, Proc_Component_Def_Stmt, \
     Proc_Decl, End_Type_Stmt, End_Interface_Stmt, Procedure_Declaration_Stmt, Pointer_Assignment_Stmt, Cycle_Stmt, \
-    Equiv_Operand, Case_Value_Range_List
+    Equiv_Operand, Case_Value_Range_List, Attr_Spec, Explicit_Shape_Spec_List
 from fparser.two.Fortran2008 import Procedure_Stmt, Type_Declaration_Stmt, Error_Stop_Stmt
 from fparser.two.utils import Base, walk, BinaryOpBase, UnaryOpBase, NumberBase, BlockBase
 
@@ -3598,7 +3598,8 @@ GLOBAL_DATA_OBJ_NAME = 'global_data'
 GLOBAL_DATA_TYPE_NAME = 'global_data_type'
 
 
-def consolidate_global_data_into_arg(ast: Program, always_add_global_data_arg: bool = False) -> Program:
+def consolidate_global_data_into_arg(ast: Program, entry_points: List[SPEC],
+                                     always_add_global_data_arg: bool = False) -> Program:
     """
     Move all the global data into one structure and use it from there.
     TODO: We will have circular dependency if there are global objects of derived type. How to handle that?
@@ -3622,10 +3623,11 @@ def consolidate_global_data_into_arg(ast: Program, always_add_global_data_arg: b
         if not spart:
             continue
         for tdecl in children_of_type(spart, Type_Declaration_Stmt):
-            typ, attr, _ = tdecl.children
+            typ, attr, decl = tdecl.children
             if 'PARAMETER' in f"{attr}":
-                # This is a constant which should have been propagated away already.
-                continue
+                attr.items = [spec for spec in attr.children if spec.string != 'PARAMETER']
+                if not attr.items:
+                    tdecl.items = (typ, None, decl)
             all_global_vars.append(tdecl.tofortran())
     all_derived_types = '\n'.join(all_derived_types)
     all_global_vars = '\n'.join(all_global_vars)
@@ -3670,10 +3672,12 @@ def consolidate_global_data_into_arg(ast: Program, always_add_global_data_arg: b
             stmt = singular(children_of_type(fn, NAMED_STMTS_OF_INTEREST_CLASSES))
             assert isinstance(stmt, (Function_Stmt, Subroutine_Stmt))
             prefix, name, dummy_args, whatever = stmt.children
-            if dummy_args:
-                prepend_children(dummy_args, Name(GLOBAL_DATA_OBJ_NAME))
-            else:
-                set_children(stmt, (prefix, name, Dummy_Arg_Name_List(GLOBAL_DATA_OBJ_NAME), whatever))
+            # Entry points should not need the internal global_data dummy argument
+            if not (name.string,) in entry_points:
+                if dummy_args:
+                    prepend_children(dummy_args, Name(GLOBAL_DATA_OBJ_NAME))
+                else:
+                    set_children(stmt, (prefix, name, Dummy_Arg_Name_List(GLOBAL_DATA_OBJ_NAME), whatever))
             spart = atmost_one(children_of_type(fn, Specification_Part))
             use_stmt = f"use {GLOBAL_DATA_MOD_NAME}, only : {GLOBAL_DATA_TYPE_NAME}"
             if spart:
@@ -3816,8 +3820,11 @@ end subroutine {fn_name}
 
     global_inited_vars: List[SPEC] = [
         k for k, v in ident_map.items()
-        if isinstance(v, Entity_Decl) and not find_type_of_entity(v, alias_map).const
-           and (find_type_of_entity(v, alias_map).spec in type_defs or atmost_one(children_of_type(v, Initialization)))
+        if isinstance(v, Entity_Decl)
+           and (not find_type_of_entity(v, alias_map).const
+                or atmost_one(children_of_type(atmost_one(children_of_type(v, Initialization)), Array_Constructor)))
+           and (find_type_of_entity(v, alias_map).spec in type_defs
+                or atmost_one(children_of_type(v, Initialization)))
            and search_scope_spec(v) and isinstance(alias_map[search_scope_spec(v)], Module_Stmt)
     ]
     if global_inited_vars:

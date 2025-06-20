@@ -34,7 +34,7 @@ from dace.frontend.fortran.ast_desugaring import ENTRY_POINT_OBJECT_CLASSES, NAM
     make_practically_constant_arguments_constants, exploit_locally_constant_variables, \
     assign_globally_unique_subprogram_names, convert_data_statements_into_assignments, \
     deconstruct_statement_functions, assign_globally_unique_variable_names, deconstuct_goto_statements, remove_self, \
-    prune_coarsely, consolidate_global_data_into_arg
+    prune_coarsely, consolidate_global_data_into_arg, create_global_initializers
 from dace.frontend.fortran.ast_internal_classes import FNode, Main_Program_Node, Name_Node, Var_Decl_Node
 from dace.frontend.fortran.ast_internal_classes import Program_Node
 from dace.frontend.fortran.ast_utils import children_of_type, mywalk, atmost_one
@@ -2119,6 +2119,14 @@ class AST_translator:
         :param cfg: The control flow region to which the node should be translated
         """
 
+
+        # Transform array assignments into individual assignments
+        if isinstance(node.rval, ast_internal_classes.Array_Constructor_Node):
+            # node.lval = node.lval.name
+            # new_exec = ast_transforms.ReplaceArrayConstructor().visit(node)
+            new_exec = ast_transforms.ReplaceArrayAssignment().visit(node)
+            self.translate(new_exec, sdfg, cfg)
+            return
         calls = list(mywalk(node, ast_internal_classes.Call_Expr_Node))
         if len(calls) == 1:
             augmented_call = calls[0]
@@ -2813,9 +2821,10 @@ def _checkpoint_ast(cfg: ParseConfig, name: str, ast: Program):
     """
     If a checkpoint directory was specified in the configs, will dump the AST there in various stages of preprocessing.
     """
-    if cfg.ast_checkpoint_dir:
-        with open(cfg.ast_checkpoint_dir.joinpath(name), 'w') as f:
-            f.write(ast.tofortran())
+    # if cfg.ast_checkpoint_dir:
+    cfg.ast_checkpoint_dir = Path("/scratch/fhrold/ethz/thesis/pytest/")
+    with open(cfg.ast_checkpoint_dir.joinpath(name), 'w') as f:
+        f.write(ast.tofortran())
 
 
 def run_fparser_transformations(ast: Program, cfg: ParseConfig):
@@ -2903,7 +2912,8 @@ def run_fparser_transformations(ast: Program, cfg: ParseConfig):
 
     if cfg.consolidate_global_data:
         print("FParser Op: Consolidating the global variables of the AST...")
-        ast = consolidate_global_data_into_arg(ast)
+        ast = create_global_initializers(ast, cfg.entry_points)
+        ast = consolidate_global_data_into_arg(ast, cfg.entry_points)
         ast = prune_coarsely(ast, cfg.do_not_prune)
         _checkpoint_ast(cfg, 'ast_v4.f90', ast)
 
@@ -3137,6 +3147,9 @@ def create_singular_sdfg_from_string(
     gmap = create_sdfg_from_internal_ast(own_ast, program, cfg)
     assert gmap.keys() == {entry_point[-1]}
     g = list(gmap.values())[0]
+
+    fpath = os.path.join('_dacegraphs', 'final.sdfgz')
+    g.save(fpath, exception=None, compress=True)
 
     return g
 
