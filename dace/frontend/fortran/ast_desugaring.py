@@ -3215,6 +3215,35 @@ def const_eval_nodes(ast: Program) -> Program:
     return ast
 
 
+def unroll_loops(ast: Program) -> Program:
+    print ("Unrolling loops!")
+    for node in reversed(walk(ast, (Block_Nonlabel_Do_Construct, Block_Label_Do_Construct))):
+        do_stmt = node.children[0]
+        assert isinstance(do_stmt, (Label_Do_Stmt, Nonlabel_Do_Stmt))
+        assert isinstance(node.children[-1], End_Do_Stmt)
+        do_ops = node.children[1:-1]
+
+        loop_control = singular(children_of_type(do_stmt, Loop_Control))
+
+        _, cntexpr, _, _ = loop_control.children
+        if cntexpr:
+            loopvar, looprange = cntexpr
+            unrollable = True
+            for i in range(len(looprange)):
+                if not isinstance(looprange[i], Int_Literal_Constant):
+                    unrollable = False
+            if not unrollable:
+                continue
+            elif len(looprange) == 2:
+                unrolled = []
+                for i in range(int(looprange[0].tofortran()), int(looprange[1].tofortran())+1):
+                    unrolled.extend(do_ops)
+                replace_node(node, unrolled)
+
+
+    return ast
+
+
 @dataclass
 class ConstTypeInjection:
     scope_spec: Optional[SPEC]  # Only replace within this scope object.
