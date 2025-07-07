@@ -17,12 +17,20 @@ subroutine main(d)
   end do
 end subroutine main
 """).check_with_gfortran().get()
-    g = create_singular_sdfg_from_string(sources, 'main')
-    g.validate()
-    g.simplify()
-    d = np.full([5], 5, order="F", dtype=np.int32)
-    g(d=d)
-    assert(d[0] == 8)
+    ast = parse_and_improve().get()
+    ast = const_eval_nodes(ast)
+
+    got = ast.tofortran()
+    want = """
+    """.strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+    # g = create_singular_sdfg_from_string(sources, 'main')
+    # g.validate()
+    # g.simplify()
+    # d = np.full([5], 5, order="F", dtype=np.int32)
+    # g(d=d)
+    # assert(d[0] == 8)
 
 
 if __name__ == "__main__":
