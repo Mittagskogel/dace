@@ -92,6 +92,40 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_fortran_frontend_loop_unroll_index_step():
+    """Tests whether unrolling transformation correctly replaces indices."""
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  implicit none
+  integer :: idx, d(5)
+  do, idx=1,5,2
+    d(1) = d(1) + idx
+  end do
+end subroutine main
+""").check_with_gfortran().get()
+    ast = parse_and_improve(sources)
+    ast = unroll_loops(ast)
+    # print(ast.children)
+    ast = exploit_locally_constant_variables(ast)
+
+    got = ast.tofortran()
+    want = """
+SUBROUTINE main(d)
+  IMPLICIT NONE
+  INTEGER :: idx, d(5)
+  idx = 1
+  d(1) = d(1) + 1
+  idx = 3
+  d(1) = d(1) + 3
+  idx = 5
+  d(1) = d(1) + 5
+END SUBROUTINE main
+    """.strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 if __name__ == "__main__":
     test_fortran_frontend_loop_unroll()
     test_fortran_frontend_loop_unroll_index()
+    test_fortran_frontend_loop_unroll_index_step()

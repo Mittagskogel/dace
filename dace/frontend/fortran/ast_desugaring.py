@@ -3234,13 +3234,21 @@ def unroll_loops(ast: Program) -> Program:
                     unrollable = False
             if not unrollable:
                 continue
-            elif len(looprange) == 2:
+            else:
+                assert len(looprange) >= 2
+                # Tweak looprange so we can just pass it to Python
+                for i in range(len(looprange)):
+                    looprange[i] = int(looprange[i].tofortran())
+                # Increment 'end', since Python range is exclusive
+                looprange[1] += 1
+                # Add default 'step' 1 if it doesn't exist
+                if len(looprange) == 2:
+                    looprange.append(1)
                 unrolled = []
-                for i in range(int(looprange[0].tofortran()), int(looprange[1].tofortran())+1):
+                for i in range(*looprange):
                     unrolled.append(Assignment_Stmt(f"{loopvar} = {i}"))
                     unrolled.extend(deepcopy(do_ops))
                 replace_node(node, unrolled)
-
 
     return ast
 
