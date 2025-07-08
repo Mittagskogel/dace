@@ -3237,6 +3237,7 @@ def unroll_loops(ast: Program) -> Program:
             elif len(looprange) == 2:
                 unrolled = []
                 for i in range(int(looprange[0].tofortran()), int(looprange[1].tofortran())+1):
+                    unrolled.append(Assignment_Stmt(f"{loopvar} = {i}"))
                     unrolled.extend(do_ops)
                 replace_node(node, unrolled)
 

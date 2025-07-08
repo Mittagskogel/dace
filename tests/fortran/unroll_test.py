@@ -29,7 +29,7 @@ def parse_and_improve(sources: Dict[str, str], entry_points: Optional[Iterable[S
 
 
 def test_fortran_frontend_loop_unroll():
-    """Tests that unrolling transformation works."""
+    """Tests whether basic unrolling transformation works."""
     sources, main = SourceCodeBuilder().add_file("""
 subroutine main(d)
   implicit none
@@ -60,6 +60,75 @@ END SUBROUTINE main
     # d = np.full([5], 5, order="F", dtype=np.int32)
     # g(d=d)
     # assert(d[0] == 8)
+
+def test_fortran_frontend_loop_unroll_index():
+    """Tests whether unrolling transformation correctly replaces indices."""
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  implicit none
+  integer :: idx, d(5)
+  do, idx=1,3
+    d(1) = d(1) + idx
+  end do
+end subroutine main
+""").check_with_gfortran().get()
+    ast = parse_and_improve(sources)
+    ast = unroll_loops(ast)
+    print(ast.children)
+    ast = exploit_locally_constant_variables(ast)
+
+    got = ast.tofortran()
+    want = """
+SUBROUTINE main(d)
+  IMPLICIT NONE
+  INTEGER :: idx, d(5)
+  idx = 1
+  d(1) = d(1) + 1
+  idx = 2
+  d(1) = d(1) + 2
+  idx = 3
+  d(1) = d(1) + 3
+END SUBROUTINE main
+    """.strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_fortran_frontend_local_assigns():
+    """
+    Tests that local assignment statements are respected by the const replacer.
+    """
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  implicit none
+  integer :: idx, d(5)
+  idx = 1
+  d(1) = d(1) + idx
+  idx = 2
+  d(1) = d(1) + idx
+  idx = 3
+  d(1) = d(1) + idx
+end subroutine main
+""", 'main').check_with_gfortran().get()
+    ast = parse_and_improve(sources)
+    print(ast.children)
+    ast = exploit_locally_constant_variables(ast)
+
+    got = ast.tofortran()
+    want = """
+SUBROUTINE main(d)
+  IMPLICIT NONE
+  INTEGER :: idx, d(5)
+  idx = 1
+  d(1) = d(1) + 1
+  idx = 2
+  d(1) = d(1) + 2
+  idx = 3
+  d(1) = d(1) + 3
+END SUBROUTINE main
+    """.strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
 if __name__ == "__main__":
