@@ -3216,7 +3216,6 @@ def const_eval_nodes(ast: Program) -> Program:
 
 
 def unroll_loops(ast: Program) -> Program:
-    print ("Unrolling loops!")
     for node in reversed(walk(ast, (Block_Nonlabel_Do_Construct, Block_Label_Do_Construct))):
         do_stmt = node.children[0]
         assert isinstance(do_stmt, (Label_Do_Stmt, Nonlabel_Do_Stmt))
