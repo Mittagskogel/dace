@@ -3228,16 +3228,16 @@ def unroll_loops(ast: Program) -> Program:
         if cntexpr:
             loopvar, looprange = cntexpr
             unrollable = True
-            for i in range(len(looprange)):
-                if not isinstance(looprange[i], Int_Literal_Constant):
+            for rng in looprange:
+                if not isinstance(rng, Int_Literal_Constant):
                     unrollable = False
             if not unrollable:
                 continue
             else:
                 assert len(looprange) >= 2
                 # Tweak looprange so we can just pass it to Python
-                for i in range(len(looprange)):
-                    looprange[i] = int(looprange[i].tofortran())
+                for i, rng in enumerate(looprange):
+                    looprange[i] = int(rng.tofortran())
                 # Increment 'end', since Python range is exclusive
                 looprange[1] += 1
                 # Add default 'step' 1 if it doesn't exist
@@ -3246,7 +3246,8 @@ def unroll_loops(ast: Program) -> Program:
                 unrolled = []
                 for i in range(*looprange):
                     unrolled.append(Assignment_Stmt(f"{loopvar} = {i}"))
-                    unrolled.extend(deepcopy(do_ops))
+                    for op in do_ops:
+                        unrolled.append(copy_fparser_node(op))
                 replace_node(node, unrolled)
 
     return ast
