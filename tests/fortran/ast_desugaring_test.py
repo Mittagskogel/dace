@@ -2561,7 +2561,7 @@ subroutine main
 end subroutine main
 """).check_with_gfortran().get()
     ast = parse_and_improve(sources)
-    ast = consolidate_global_data_into_arg(ast)
+    ast = consolidate_global_data_into_arg(ast, [('main',)])
 
     got = ast.tofortran()
     want = """
@@ -2592,7 +2592,7 @@ MODULE lib
     what = .TRUE.
   END SUBROUTINE update
 END MODULE
-SUBROUTINE main(global_data)
+SUBROUTINE main
   USE global_mod, ONLY: global_data_type
   USE lib, ONLY: update
   IMPLICIT NONE
