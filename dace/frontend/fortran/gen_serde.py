@@ -109,7 +109,7 @@ def gen_base_type_serializer(typ: str, kind: Optional[int] = None) -> Subroutine
     if typ == 'logical':
         op = '\n'.join(['y = merge(1, 0, x)', "write (io, '(g0)', advance='no') y"])
     elif typ == 'real':
-        op = "write (buf, '(e28.20)') x; write (io, '(A)', advance='no') trim(adjustl(buf))"
+        op = "write (buf, '(e28.20e4)') x; write (io, '(A)', advance='no') trim(adjustl(buf))"
     else:
         op = "write (io, '(g0)', advance='no') x"
 

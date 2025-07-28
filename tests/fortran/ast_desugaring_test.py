@@ -10,7 +10,8 @@ from dace.frontend.fortran.ast_desugaring import correct_for_function_calls, dec
     make_practically_constant_arguments_constants, make_practically_constant_global_vars_constants, \
     exploit_locally_constant_variables, create_global_initializers, convert_data_statements_into_assignments, \
     deconstruct_statement_functions, deconstuct_goto_statements, SPEC, remove_access_and_bind_statements, \
-    identifier_specs, alias_specs, consolidate_uses, consolidate_global_data_into_arg, prune_coarsely
+    identifier_specs, alias_specs, consolidate_uses, consolidate_global_data_into_arg, prune_coarsely, \
+    unroll_loops
 from dace.frontend.fortran.fortran_parser import construct_full_ast
 from tests.fortran.fortran_test_helper import SourceCodeBuilder
 
@@ -1586,7 +1587,7 @@ subroutine main(out)
   integer, pointer :: ptr(:) => null()
   integer, pointer :: unused_ptr(:) => null()
   integer, intent(out) :: out(4)
-  cfg % ptr => cfg % data  ! TODO: This too should go away.
+  cfg % ptr => cfg % data
   ptr => cfg % ptr
   out = cfg % data
 end subroutine main
@@ -1608,7 +1609,6 @@ SUBROUTINE main(out)
   IMPLICIT NONE
   TYPE(T), TARGET :: cfg
   INTEGER, INTENT(OUT) :: out(4)
-  cfg % ptr => cfg % data
   out = cfg % data
 END SUBROUTINE main
 """.strip()
@@ -2525,6 +2525,65 @@ SUBROUTINE main
       iarr(i) = iarr(i - 1) + 1
     END IF
   END DO
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_exploit_locally_constant_array_indices():
+    sources, main = SourceCodeBuilder().add_file("""
+module lib
+  implicit none
+  integer, parameter :: par(3) = [5, 6, 7]
+
+  contains
+  subroutine foo()
+    integer :: iarr(3) = 0
+    integer :: idx, jdx, tmp
+    do jdx=1,iarr(3)
+      do idx=1,3
+        tmp = par(idx)
+      end do
+    end do
+  end subroutine foo
+end module lib
+
+subroutine main()
+  use lib
+  implicit none
+
+  call foo()
+end subroutine main
+""").check_with_gfortran().get()
+    ast = parse_and_improve(sources)
+    ast = const_eval_nodes(ast)
+    ast = unroll_loops(ast)
+    ast = exploit_locally_constant_variables(ast)
+
+    got = ast.tofortran()
+    want = """
+MODULE lib
+  IMPLICIT NONE
+  INTEGER, PARAMETER :: par(3) = [5, 6, 7]
+  CONTAINS
+  SUBROUTINE foo
+    INTEGER :: iarr(3) = 0
+    INTEGER :: idx, jdx, tmp
+    DO jdx = 1, iarr(3)
+      idx = 1
+      tmp = par(1)
+      idx = 2
+      tmp = par(2)
+      idx = 3
+      tmp = par(3)
+    END DO
+  END SUBROUTINE foo
+END MODULE lib
+SUBROUTINE main
+  USE lib
+  IMPLICIT NONE
+  CALL foo
 END SUBROUTINE main
 """.strip()
     assert got == want

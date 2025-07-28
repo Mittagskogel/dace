@@ -29,7 +29,7 @@ from fparser.two.Fortran2003 import Program_Stmt, Module_Stmt, Function_Stmt, Su
     Deallocate_Stmt, Close_Stmt, Goto_Stmt, Continue_Stmt, Format_Stmt, Stmt_Function_Stmt, Internal_Subprogram_Part, \
     Private_Components_Stmt, Generic_Spec, Language_Binding_Spec, Type_Attr_Spec, Suffix, Proc_Component_Def_Stmt, \
     Proc_Decl, End_Type_Stmt, End_Interface_Stmt, Procedure_Declaration_Stmt, Pointer_Assignment_Stmt, Cycle_Stmt, \
-    Equiv_Operand, Case_Value_Range_List, Attr_Spec, Explicit_Shape_Spec_List
+    Equiv_Operand, Case_Value_Range_List, Attr_Spec, Explicit_Shape_Spec_List, Ac_Value_List
 from fparser.two.Fortran2008 import Procedure_Stmt, Type_Declaration_Stmt, Error_Stop_Stmt
 from fparser.two.utils import Base, walk, BinaryOpBase, UnaryOpBase, NumberBase, BlockBase
 
@@ -638,6 +638,46 @@ def _eval_real_literal(x: Union[Signed_Real_Literal_Constant, Real_Literal_Const
 
 def _const_eval_basic_type(expr: Base, alias_map: SPEC_TABLE) -> Optional[NUMPY_TYPES]:
     if isinstance(expr, (Part_Ref, Data_Ref)):
+        # return None
+        name_node = expr.children[0]
+        # Only support scalar array accesses for now
+        if (len(expr.children) > 1 and isinstance(expr.children[1], Section_Subscript_List)):
+            subsc = expr.children[1]
+            if (len(subsc.children) == 1):
+                # TODO index offset correction
+                idx = _const_eval_basic_type(subsc.children[0], alias_map)
+                if not idx:
+                    # Array index is not constant
+                    return None
+                # This is just copied behavior from 'Name'
+                # But we need to keep track of idx, so we can't just do
+                # return _const_eval_basic_type(name_node, alias_map)
+                spec = search_real_local_alias_spec(name_node, alias_map)
+                if not spec:
+                    # Does not even have a valid identifier.
+                    return None
+                decl = alias_map[spec]
+                if not isinstance(decl, Entity_Decl):
+                    # Is not even a data entity.
+                    return None
+                typ = find_type_of_entity(decl, alias_map)
+                if not typ or not typ.const:
+                    # Does not have a constant type.
+                    return None
+                init = atmost_one(children_of_type(decl, Initialization))
+                # TODO: Add ref.
+                _, iexpr = init.children
+                if f"{iexpr}" == 'NULL()':
+                    # We don't have good representation of "null pointer".
+                    return None
+                # Expect an Array_Constructor
+                if (isinstance(iexpr, Array_Constructor)):
+                    # Expect an Ac_Value_List
+                    _, acvall, _ = iexpr.children
+                    if (isinstance(acvall, Ac_Value_List)):
+                        # TODO Bounds check here, but idx is non-normalized anyway so all of this is wrong no matter what
+                        return _const_eval_basic_type(acvall.children[idx-1], alias_map)
+        # Fail otherwise
         return None
     elif isinstance(expr, Name):
         spec = search_real_local_alias_spec(expr, alias_map)
@@ -689,7 +729,8 @@ def _const_eval_basic_type(expr: Base, alias_map: SPEC_TABLE) -> Optional[NUMPY_
         elif intr.string in INTR_FNS:
             avals = tuple(_const_eval_basic_type(a, alias_map) for a in args)
             if all(isinstance(a, (np.float32, np.float64)) for a in avals):
-                return np.arctan(*avals)
+                # return np.arctan(*avals)
+                return INTR_FNS[intr.string](*avals)
         elif intr.string == 'SELECTED_REAL_KIND':
             # Probably this is not correct as it would need to detect which arg was passed.
             if len(args) == 1:
@@ -852,7 +893,7 @@ def _dataref_root(dref: Union[Name, Data_Ref, Data_Pointer_Object], scope_spec: 
         root_type = find_type_dataref(root, scope_spec, alias_map)
     elif isinstance(root, Part_Ref):
         root_type = find_type_dataref(root, scope_spec, alias_map)
-    assert root_type
+    assert root_type, f"cannot find type: {root} in {scope_spec}"
 
     return root, root_type, rest
 
@@ -870,7 +911,7 @@ def find_dataref_component_spec(dref: Union[Name, Data_Ref], scope_spec: SPEC, a
             comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
         elif isinstance(comp, Name):
             comp_spec = find_real_ident_spec(comp.string, cur_type.spec, alias_map)
-        assert comp_spec in alias_map, f"canont find: {comp_spec} / {dref} in {scope_spec}"
+        assert comp_spec in alias_map, f"cannot find: {comp_spec} / {dref} in {scope_spec}"
         # So, we get the type spec for those component shards.
         cur_type = find_type_of_entity(alias_map[comp_spec], alias_map)
         assert cur_type
@@ -883,9 +924,90 @@ def find_dataref_component_spec(dref: Union[Name, Data_Ref], scope_spec: SPEC, a
         comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
     elif isinstance(comp, Name):
         comp_spec = find_real_ident_spec(comp.string, cur_type.spec, alias_map)
-    assert comp_spec in alias_map, f"canont find: {comp_spec} / {dref} in {scope_spec}"
+    assert comp_spec in alias_map, f"cannot find: {comp_spec} / {dref} in {scope_spec}"
 
     return comp_spec
+
+
+# TODO: Consider merging functionality with find_dataref_component_spec
+def find_indexed_dataref_component_spec(dref: Union[Name, Data_Ref],
+                                        scope_spec: SPEC,
+                                        alias_map: SPEC_TABLE,
+                                        allow_variable_indices=False) -> SPEC:
+    # The root must have been a typed object.
+    root, root_type, rest = _dataref_root(dref, scope_spec, alias_map)
+
+    # Initialize idx_spec with root name
+    # We don't need the full spec because it'll already be available in the root spec
+    assert isinstance(root, (Name, Part_Ref))
+    if isinstance(root, Part_Ref):
+        part_name, subsc = root.children[0], root.children[1]
+        indices = ()
+        for subsc_arg in subsc.children:
+            idx = _const_eval_basic_type(subsc_arg, alias_map)
+            if not idx:
+                if allow_variable_indices:
+                    assert isinstance(subsc_arg, Name)
+                    idx = subsc_arg.string
+                else:
+                    # Part_Ref did not have a constant index
+                    return None
+            indices += (idx,)
+        idx_spec = ((part_name.string, *indices),)
+    elif isinstance(root, Name):
+        idx_spec = (root.string,)
+
+    cur_type = root_type
+    # All component shards except for the last one must have been type objects too.
+    for comp in rest[:-1]:
+        assert isinstance(comp, (Name, Part_Ref))
+        if isinstance(comp, Part_Ref):
+            part_name, subsc = comp.children[0], comp.children[1]
+            indices = ()
+            for subsc_arg in subsc.children:
+                idx = _const_eval_basic_type(subsc_arg, alias_map)
+                if not idx:
+                    if allow_variable_indices:
+                        assert isinstance(subsc_arg, Name)
+                        idx = subsc_arg.string
+                    else:
+                        # Part_Ref did not have a constant index
+                        return None
+                indices += (idx,)
+            comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
+            idx_spec += ((comp_spec[-1], *indices),)
+        elif isinstance(comp, Name):
+            comp_spec = find_real_ident_spec(comp.string, cur_type.spec, alias_map)
+            idx_spec += (comp_spec[-1],)
+        assert comp_spec in alias_map, f"cannot find: {comp_spec} / {dref} in {scope_spec}"
+        # So, we get the type spec for those component shards.
+        cur_type = find_type_of_entity(alias_map[comp_spec], alias_map)
+        assert cur_type
+
+    # For the last one, we just need the component spec.
+    comp = rest[-1]
+    assert isinstance(comp, (Name, Part_Ref))
+    if isinstance(comp, Part_Ref):
+        part_name, subsc = comp.children[0], comp.children[1]
+        indices = ()
+        for subsc_arg in subsc.children:
+            idx = _const_eval_basic_type(subsc_arg, alias_map)
+            if not idx:
+                if allow_variable_indices:
+                    assert isinstance(subsc_arg, Name)
+                    idx = subsc_arg.string
+                else:
+                    # Part_Ref did not have a constant index
+                    return None
+                indices += (idx,)
+        comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
+        idx_spec += ((comp_spec[-1], *indices),)
+    elif isinstance(comp, Name):
+        comp_spec = find_real_ident_spec(comp.string, cur_type.spec, alias_map)
+        idx_spec += (comp_spec[-1],)
+    assert comp_spec in alias_map, f"cannot find: {comp_spec} / {dref} in {scope_spec}"
+
+    return idx_spec
 
 
 def find_type_dataref(dref: Union[Name, Part_Ref, Data_Ref, Data_Pointer_Object], scope_spec: SPEC,
@@ -1740,6 +1862,7 @@ def prune_coarsely(ast: Program, keepers: Iterable[SPEC]) -> Program:
         alias_map = alias_specs(ast)
         iface_map = interface_specs(ast, alias_map)
 
+        # Make a list of all used functions
         used_fns: Set[SPEC] = set(keepers)
         for k, v in ident_map.items():
             if len(k) < 2 or not isinstance(v, (Function_Stmt, Subroutine_Stmt)):
@@ -1773,6 +1896,7 @@ def prune_coarsely(ast: Program, keepers: Iterable[SPEC]) -> Program:
         for k, vs in iface_map.items():
             for v in vs:
                 used_fns.add(v)
+        # Remove all unused functions
         for k, v in ident_map.items():
             if not isinstance(v, (Function_Stmt, Subroutine_Stmt)):
                 continue
@@ -1780,6 +1904,7 @@ def prune_coarsely(ast: Program, keepers: Iterable[SPEC]) -> Program:
                 remove_self(v.parent)
                 removed_something = True
 
+        # Make a list of all used types
         used_types: Set[SPEC] = set()
         for k, v in ident_map.items():
             if not isinstance(v, Derived_Type_Stmt):
@@ -1801,6 +1926,7 @@ def prune_coarsely(ast: Program, keepers: Iterable[SPEC]) -> Program:
                 continue
             if k not in ident_map:
                 used_types.add(ident_spec(v))
+        # Remove all unused types
         for k, v in ident_map.items():
             if not isinstance(v, Derived_Type_Stmt):
                 continue
@@ -1808,6 +1934,7 @@ def prune_coarsely(ast: Program, keepers: Iterable[SPEC]) -> Program:
                 remove_self(v.parent)
                 removed_something = True
 
+        # Make a list of all used interfaces
         used_ifaces: Set[SPEC] = set()
         for k, v in ident_map.items():
             if len(k) < 2 or k[-2] != INTERFACE_NAMESPACE:
@@ -1830,6 +1957,7 @@ def prune_coarsely(ast: Program, keepers: Iterable[SPEC]) -> Program:
                 continue
             if k not in ident_map:
                 used_ifaces.add(vspec)
+        # Remove all unused interfaces
         for k, v in ident_map.items():
             if len(k) < 2 or k[-2] != INTERFACE_NAMESPACE:
                 continue
@@ -1837,6 +1965,7 @@ def prune_coarsely(ast: Program, keepers: Iterable[SPEC]) -> Program:
                 remove_self(v.parent)
                 removed_something = True
 
+        # Make a list of all used variables
         used_vars: Set[SPEC] = set()
         for k, v in ident_map.items():
             if not isinstance(v, (Entity_Decl, Proc_Decl)):
@@ -1856,6 +1985,7 @@ def prune_coarsely(ast: Program, keepers: Iterable[SPEC]) -> Program:
                 continue
             if k not in ident_map:
                 used_vars.add(ident_spec(v))
+        # Remove all unused variables
         for k, v in ident_map.items():
             if not isinstance(v, (Entity_Decl, Proc_Decl)):
                 continue
@@ -1973,17 +2103,17 @@ def prune_unused_objects(ast: Program, keepers: List[SPEC]) -> Program:
         if ns in killed:
             continue
         ns_typ = find_type_of_entity(ns_node, alias_map)
-        if isinstance(ns_node, Entity_Decl) and ns_typ.pointer:
-            # If it is a pointer that we have decided to remove, then clear out all of its assignments.
-            for pa in walk(ast, Pointer_Assignment_Stmt):
-                dst = pa.children[0]
-                if not isinstance(dst, Name):
-                    # TODO: Handle data-refs.
-                    continue
-                dst_spec = search_real_local_alias_spec(dst, alias_map)
-                if dst_spec and alias_map[dst_spec] is ns_node:
-                    remove_self(pa)
         if isinstance(ns_node, Entity_Decl):
+            if ns_typ.pointer:
+                # If it is a pointer that we have decided to remove, then clear out all of its assignments.
+                for pa in walk(ast, Pointer_Assignment_Stmt):
+                    dst = pa.children[0]
+                    if not isinstance(dst, Name):
+                        # TODO: Handle data-refs.
+                        continue
+                    dst_spec = search_real_local_alias_spec(dst, alias_map)
+                    if dst_spec and alias_map[dst_spec] is ns_node:
+                        remove_self(pa)
             elist = ns_node.parent
             remove_self(ns_node)
             # But there are many things to clean-up.
@@ -2018,6 +2148,16 @@ def prune_unused_objects(ast: Program, keepers: List[SPEC]) -> Program:
             if not elist_spart.children:
                 remove_self(elist_spart)
         elif isinstance(ns_node, Component_Decl):
+            if ns_typ.pointer:
+                # If part of the Component_Decl is a pointer that we have decided to remove,
+                # then clear out all of its assignments
+                for pa in walk(ast, Pointer_Assignment_Stmt):
+                    dst = pa.children[0]
+                    scope_spec = search_scope_spec(dst)
+                    assert scope_spec
+                    dst_spec = find_dataref_component_spec(dst, scope_spec, alias_map)
+                    if dst_spec and alias_map[dst_spec] is ns_node:
+                        remove_self(pa)
             clist = ns_node.parent
             remove_self(ns_node)
             # But there are many things to clean-up.
@@ -2250,36 +2390,71 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
     plus: Dict[Union[SPEC, Tuple[SPEC, SPEC]], LITERAL_TYPES] = copy(plus) if plus else {}
     minus: Set[Union[SPEC, Tuple[SPEC, SPEC]]] = copy(minus) if minus else set()
 
-    def _root_comp(dref: (Data_Ref, Data_Pointer_Object)):
+    def _root_comp(dref: (Data_Ref, Data_Pointer_Object),
+                   allow_variable_indices=False):
+        """Generate a unique spec for a Data_Ref."""
+        # Check that the scope is valid
         scope_spec = search_scope_spec(dref)
         assert scope_spec
-        if walk(dref, Part_Ref):
-            # If we are dealing with any array subscript, we cannot get a "component spec", and should take the
-            # pessimistic path.
-            # TODO: Handle the `cfg % a(1:5) % b(1:5) % c` type cases better.
-            return None
-        root, _, _ = _dataref_root(dref, scope_spec, alias_map)
+        for pref in walk(dref, Part_Ref):
+            # TODO: If we have an array range subscript, we don't handle it.
+            if walk(pref, Subscript_Triplet):
+                return None
+        root = dref
+        while not isinstance(root, Name):
+            root, _, _ = _dataref_root(root, scope_spec, alias_map)
         loc = search_real_local_alias_spec(root, alias_map)
         assert loc
         root_spec = ident_spec(alias_map[loc])
-        comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
+        comp_spec = find_indexed_dataref_component_spec(dref, scope_spec,
+                                                        alias_map,
+                                                        allow_variable_indices)
+        if not comp_spec:
+            # Some part of the spec was not constant
+            return None
         return root_spec, comp_spec
 
+    def _pref_spec(pref: (Part_Ref)):
+        scope_spec = search_scope_spec(pref)
+        assert scope_spec
+        root, _, _ = _dataref_root(pref, scope_spec, alias_map)
+        loc = search_real_local_alias_spec(root, alias_map)
+        assert loc
+        root_spec = ident_spec(alias_map[loc])
+        pref_name = pref.children[0].string
+        subsc = pref.children[1]
+        assert isinstance(subsc, Section_Subscript_List)
+        if len(subsc.children) > 1:
+            # We don't handle array subscript ranges yet
+            return None
+        idx = _const_eval_basic_type(subsc.children[0], alias_map)
+        if not idx:
+            return None
+        idx_spec = (pref_name, idx)
+        return root_spec, idx_spec
+
+
     def _integrate_subresults(tp: Dict[SPEC, LITERAL_TYPES], tm: Set[SPEC]):
+        """Update plus, minus with tp, tm."""
+        # There should be no overlap between tp and tm
         assert not (tm & tp.keys())
+        # Remove tm from plus and add it to minus
         for k in tm:
             if k in plus:
                 del plus[k]
             minus.add(k)
+        # Remove tp from minus and add it to plus
         for k, v in tp.items():
             if k in minus:
                 minus.remove(k)
             plus[k] = v
 
     def _inject_knowns(x: Base, value: bool = True, pointer: bool = True):
+        """Inject known values into the tree rooted in x."""
         if isinstance(x, (*LITERAL_CLASSES, Char_Literal_Constant, Write_Stmt, Close_Stmt, Goto_Stmt, Cycle_Stmt)):
             pass
         elif isinstance(x, Assignment_Stmt):
+            # Replace left and right sides.
             lv, op, rv = x.children
             _inject_knowns(lv, value=False, pointer=True)
             _inject_knowns(rv)
@@ -2299,15 +2474,76 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
                 if isinstance(par, (Data_Ref, Part_Ref)):
                     replace_node(par, Data_Ref(par.tofortran()))
         elif isinstance(x, Data_Ref):
-            spec = _root_comp(x)
+            # Allow variable indices. Spec will still not be found
+            # in plus if it is not locally constant
+            spec = _root_comp(x, allow_variable_indices=True)
             if spec not in plus:
-                for pr in x.children[1:]:
+                # for pr in x.children[1:]:
+                for pr in x.children:
                     if isinstance(pr, Part_Ref):
                         _, subsc = pr.children
                         if subsc:
                             subsc = subsc.children
                         for sc in subsc:
-                            _inject_knowns(sc, value, pointer)
+                            _inject_knowns(sc, True, pointer)
+            else:
+                assert spec not in minus
+                scope_spec = find_scope_spec(x)
+                xtyp = find_type_dataref(x, scope_spec, alias_map)
+                if (pointer and xtyp.pointer) or value:
+                    par = x.parent
+                    replace_node(x, copy_fparser_node(plus[spec]))
+                    if isinstance(par, (Data_Ref, Part_Ref)):
+                        replace_node(par, Data_Ref(par.tofortran()))
+            # If there's a Part_Ref at the end of the Data_Ref,
+            # turn it into a Name and see if it matches.
+            last = x.children[-1]
+            if spec and isinstance(last, Part_Ref):
+                name, subsc = last.children
+                assert isinstance(subsc, Section_Subscript_List)
+                subsc_arg = subsc.children[0]
+                idx = _const_eval_basic_type(subsc_arg, alias_map)
+                if not idx:
+                    assert isinstance(subsc_arg, Name)
+                    idx = subsc_arg.string
+                # Cannot use _root_comp because a copied child would have no parent
+                # So instead we do surgery on the spec
+                spec = (spec[0], spec[1][:-1] + (spec[1][-1][0],))
+                if spec in plus:
+                    assert spec not in minus
+                    scope_spec = find_scope_spec(x)
+                    xtyp = find_type_dataref(x, scope_spec, alias_map)
+                    if (pointer and xtyp.pointer) or value:
+                        par = x.parent
+                        repl = Part_Ref(plus[spec].tofortran())
+
+                        root, subsc = last.children
+                        access = repl.children[-1]
+                        # We cannot just chain accesses, so we need to combine them to produce a single access.
+                        # TODO: Maybe `isinstance(c, Subscript_Triplet)` + offset manipulation?
+                        free_comps = [(i, c) for i, c in enumerate(access.children) if c == Subscript_Triplet(':')]
+                        assert len(free_comps) >= len(subsc.children), \
+                            f"Free rank cannot increase, got {root}/{access} <= {subsc}"
+                        for i, c in enumerate(subsc.children):
+                            idx, _ = free_comps[i]
+                            free_comps[i] = (idx, c)
+                        free_comps = {i: c for i, c in free_comps}
+                        set_children(access, [free_comps.get(i, c) for i, c in enumerate(access.children)])
+
+                        replace_node(x, repl)
+                        if isinstance(par, (Data_Ref, Part_Ref)):
+                            replace_node(par, Data_Ref(par.tofortran()))
+
+        elif isinstance(x, Part_Ref):
+            # Try replacing the entire Part_Ref
+            spec = _pref_spec(x)
+            if spec not in plus:
+                # Otherwise, work on the subcomponents
+                par, subsc = x.children
+                _inject_knowns(par, value=False, pointer=True)
+                assert isinstance(subsc, Section_Subscript_List)
+                for c in subsc.children:
+                    _inject_knowns(c)
                 return
             assert spec not in minus
             scope_spec = find_scope_spec(x)
@@ -2317,12 +2553,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
                 replace_node(x, copy_fparser_node(plus[spec]))
                 if isinstance(par, (Data_Ref, Part_Ref)):
                     replace_node(par, Data_Ref(par.tofortran()))
-        elif isinstance(x, Part_Ref):
-            par, subsc = x.children
-            _inject_knowns(par, value=False, pointer=True)
-            assert isinstance(subsc, Section_Subscript_List)
-            for c in subsc.children:
-                _inject_knowns(c)
+
         elif isinstance(x, Subscript_Triplet):
             for c in x.children:
                 if c:
@@ -2352,10 +2583,12 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
             raise NotImplementedError(f"cannot handle {x} | {type(x)}")
 
     if isinstance(node, list):
+        # Iterate _track_local_consts over node's elements
         for c in node:
             tp, tm = _track_local_consts(c, alias_map, plus, minus)
             _integrate_subresults(tp, tm)
     elif isinstance(node, Execution_Part):
+        # We add declarations from the corresponding specification part to plus
         scpart = atmost_one(children_of_type(node.parent, Specification_Part))
         knowns: Dict[SPEC, LITERAL_TYPES] = {}
         if scpart:
@@ -2371,6 +2604,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
                     if init and isinstance(init, LITERAL_CLASSES):
                         knowns[ident_spec(var)] = init
         _integrate_subresults(knowns, set())
+        # Iterate _track_local_consts over the execution_part
         for op in node.children:
             # TODO: We wouldn't need the exception handling once we implement for all node types.
             try:
@@ -2379,9 +2613,8 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
             except NotImplementedError:
                 plus, minus = {}, set()
     elif isinstance(node, Assignment_Stmt):
-        lv, op, rv = node.children
-        _inject_knowns(lv, value=False, pointer=True)
-        _inject_knowns(rv)
+        # lv, op, rv = node.children
+        _inject_knowns(node)
         lv, op, rv = node.children
         lspec, ltyp = None, None
         if isinstance(lv, Name):
@@ -2394,11 +2627,19 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
             lspec = _root_comp(lv)
             scope_spec = find_scope_spec(lv)
             ltyp = find_type_dataref(lv, scope_spec, alias_map)
+        elif isinstance(lv, Part_Ref):
+            lspec = _pref_spec(lv)
+            scope_spec = find_scope_spec(lv)
+            ltyp = find_type_dataref(lv, scope_spec, alias_map)
         if lspec and ltyp:
+            # Check if the rhs is constant
             rval = _const_eval_basic_type(rv, alias_map)
             if rval is None:
+                # We know that the lhs is not constant
                 _integrate_subresults({}, {lspec})
+            # Check if we have a scalar
             elif not ltyp.shape:
+                # We know that lhs is constant
                 plus[lspec] = numpy_type_to_literal(rval)
                 if lspec in minus:
                     minus.remove(lspec)
@@ -2406,6 +2647,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
         _integrate_subresults(tp, tm)
     elif isinstance(node, Pointer_Assignment_Stmt):
         lv, _, rv = node.children
+        # Raplace constants on the rhs
         _inject_knowns(rv, value=False, pointer=True)
         lv, _, rv = node.children
         lspec, ltyp = None, None
@@ -2420,6 +2662,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
             scope_spec = find_scope_spec(lv)
             ltyp = find_type_dataref(lv, scope_spec, alias_map)
         if lspec and ltyp and ltyp.pointer:
+            # Replace the pointer with whatever it's pointing to
             plus[lspec] = rv
             if lspec in minus:
                 minus.remove(lspec)
@@ -2430,8 +2673,10 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
         _inject_knowns(cond)
         _inject_knowns(body)
         cond, body = node.children
+        # Condition has an effect past the scope
         tp, tm = _track_local_consts(cond, alias_map)
         _integrate_subresults(tp, tm)
+        # Because it's in the if body, nothing can be assumed to be constant
         tp, tm = _track_local_consts(body, alias_map)
         _integrate_subresults({}, tm | tp.keys())
     elif isinstance(node, If_Construct):
@@ -2476,13 +2721,14 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
         do_ops = node.children[1:-1]
         has_pointer_asgns = bool(walk(node, Pointer_Assignment_Stmt))
 
+        # Everything updated in the body will not be constant outside
         net_tpm = set()
-        for op in do_ops:
-            tp, tm = _track_local_consts(op, alias_map, {}, set())
-            net_tpm.update(tp.keys())
-            net_tpm.update(tm)
+        tp, tm = _track_local_consts(do_ops, alias_map, {}, set())
+        net_tpm.update(tp.keys())
+        net_tpm.update(tm)
         loop_control = singular(children_of_type(do_stmt, Loop_Control))
         _, cntexpr, _, _ = loop_control.children
+        # The loop variable is not constant
         if cntexpr:
             loopvar, _ = cntexpr
             loopvar_spec = _find_real_ident_spec(loopvar, alias_map)
@@ -2501,6 +2747,8 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: SPEC_TABLE,
                                          net_tpm | minus)
             _integrate_subresults(tp, tm)
 
+        # Loop var cannot be assumed to be generally constant after the loop
+        # Only if it's strictly a for loop, for example. But we don't handle this case.
         _, loop_ctl = do_stmt.children
         _, loop_var, _, _ = loop_ctl.children
         if loop_var:
@@ -3230,25 +3478,26 @@ def unroll_loops(ast: Program) -> Program:
             unrollable = True
             for rng in looprange:
                 if not isinstance(rng, Int_Literal_Constant):
+                    # We need the loop range to be constant
                     unrollable = False
             if not unrollable:
                 continue
-            else:
-                assert len(looprange) >= 2
-                # Tweak looprange so we can just pass it to Python
-                for i, rng in enumerate(looprange):
-                    looprange[i] = int(rng.tofortran())
-                # Increment 'end', since Python range is exclusive
-                looprange[1] += 1
-                # Add default 'step' 1 if it doesn't exist
-                if len(looprange) == 2:
-                    looprange.append(1)
-                unrolled = []
-                for i in range(*looprange):
-                    unrolled.append(Assignment_Stmt(f"{loopvar} = {i}"))
-                    for op in do_ops:
-                        unrolled.append(copy_fparser_node(op))
-                replace_node(node, unrolled)
+            assert len(looprange) >= 2
+            # Tweak looprange so we can just pass it to Python
+            for i, rng in enumerate(looprange):
+                looprange[i] = int(rng.tofortran())
+            # Increment 'end', since Python range is exclusive
+            looprange[1] += 1
+            # Add default 'step' 1 if it doesn't exist
+            if len(looprange) == 2:
+                looprange.append(1)
+            unrolled = []
+            for i in range(*looprange):
+                unrolled.append(Assignment_Stmt(f"{loopvar} = {i}"))
+                for op in do_ops:
+                    # unrolled.append(copy_fparser_node(op))
+                    unrolled.append(deepcopy(op))
+            replace_node(node, unrolled)
 
     return ast
 

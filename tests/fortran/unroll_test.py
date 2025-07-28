@@ -72,7 +72,6 @@ end subroutine main
 """).check_with_gfortran().get()
     ast = parse_and_improve(sources)
     ast = unroll_loops(ast)
-    # print(ast.children)
     ast = exploit_locally_constant_variables(ast)
 
     got = ast.tofortran()
@@ -105,7 +104,6 @@ end subroutine main
 """).check_with_gfortran().get()
     ast = parse_and_improve(sources)
     ast = unroll_loops(ast)
-    # print(ast.children)
     ast = exploit_locally_constant_variables(ast)
 
     got = ast.tofortran()
@@ -125,7 +123,107 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_fortran_frontend_loop_unroll_fancy():
+    """Tests whether unrolling transformation correctly replaces indices."""
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  implicit none
+  integer, parameter :: inc(3) = [3, 4, 2]
+  type :: t
+    integer :: a, b
+  end type t
+  type(t) :: arr(3)
+  integer :: idx, jdx, tmp, d(5)
+  idx = inc(1)
+  do, jdx=1,d(2)
+    do, idx=1,3
+      tmp = inc(idx)
+      d(idx) = d(idx) + tmp
+    end do
+  end do
+  idx = 3
+  arr(idx)%a = 5
+end subroutine main
+""").check_with_gfortran().get()
+    ast = parse_and_improve(sources)
+    ast = unroll_loops(ast)
+    ast = exploit_locally_constant_variables(ast)
+    ast = const_eval_nodes(ast)
+
+    got = ast.tofortran()
+    want = """
+SUBROUTINE main(d)
+  IMPLICIT NONE
+  INTEGER, PARAMETER :: inc(3) = [3, 4, 2]
+  TYPE :: t
+    INTEGER :: a, b
+  END TYPE t
+  TYPE(t) :: arr(3)
+  INTEGER :: idx, jdx, tmp, d(5)
+  idx = 3
+  DO , jdx = 1, d(2)
+    idx = 1
+    tmp = 3
+    d(1) = d(1) + 3
+    idx = 2
+    tmp = 4
+    d(2) = d(2) + 4
+    idx = 3
+    tmp = 2
+    d(3) = d(3) + 2
+  END DO
+  idx = 3
+  arr(3) % a = 5
+END SUBROUTINE main
+    """.strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_fortran_frontend_loop_unroll_fancy():
+    """Tests whether unrolling transformation correctly replaces indices."""
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  implicit none
+  type t_qx_ptr
+    integer, pointer :: ptr(:, :)
+    integer, pointer :: qtr
+  end type t_qx_ptr
+  type(t_qx_ptr) :: q(3)
+  integer, target :: x(2,3)
+  integer :: d
+
+  q(1) % ptr => x(:,:)
+  q(1) % ptr(d,1) = 5
+  q(1) % ptr(2,2) = 2
+  q(1) % qtr => x(1,2)
+end subroutine main
+""").check_with_gfortran().get()
+    ast = parse_and_improve(sources)
+    ast = unroll_loops(ast)
+    ast = exploit_locally_constant_variables(ast)
+    ast = const_eval_nodes(ast)
+    ast = prune_unused_objects(ast, [("main",)])
+
+    got = ast.tofortran()
+    want = """
+SUBROUTINE main(d)
+  IMPLICIT NONE
+  TYPE :: t_qx_ptr
+  END TYPE t_qx_ptr
+  TYPE(t_qx_ptr) :: q(3)
+  INTEGER, TARGET :: x(2, 3)
+  INTEGER :: d
+  x(d, 1) = 5
+  x(2, 2) = 2
+END SUBROUTINE main
+    """.strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 if __name__ == "__main__":
     test_fortran_frontend_loop_unroll()
     test_fortran_frontend_loop_unroll_index()
     test_fortran_frontend_loop_unroll_index_step()
+    test_fortran_frontend_loop_unroll_fancy()

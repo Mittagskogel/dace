@@ -2897,7 +2897,9 @@ def run_fparser_transformations(ast: Program, cfg: ParseConfig):
         # Fix the practically constant arguments, just in case.
         ast = make_practically_constant_arguments_constants(ast, cfg.entry_points)
         print("FParser Op: Unroll loops...")
+        _checkpoint_ast(cfg, 'before_unroll.f90', ast)
         ast = unroll_loops(ast)
+        _checkpoint_ast(cfg, 'after_unroll.f90', ast)
         print("FParser Op: Fix local vars...")
         # Fix the locally constant variables, just in case.
         ast = exploit_locally_constant_variables(ast)
@@ -2905,7 +2907,9 @@ def run_fparser_transformations(ast: Program, cfg: ParseConfig):
         print("FParser Op: Pruning...")
         ast = const_eval_nodes(ast)
         ast = prune_branches(ast)
+        _checkpoint_ast(cfg, 'before_prune.f90', ast)
         ast = prune_unused_objects(ast, cfg.do_not_prune)
+        _checkpoint_ast(cfg, 'after_prune.f90', ast)
         ast = consolidate_uses(ast)
 
         ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
