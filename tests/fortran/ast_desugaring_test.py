@@ -3068,3 +3068,22 @@ END SUBROUTINE main
 """.strip()
     assert got == want
     SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+def test_intrinsic_selected_real_kind():
+    """Test constant evaluation of SELECTED_REAL_KIND intrinsic."""
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main
+  implicit none
+  integer :: a = selected_real_kind(P=1, R=2)
+  ! integer :: b = selected_real_kind(1, 2)
+  ! integer :: c = selected_real_kind(R=0)
+end subroutine main
+""").check_with_gfortran().get()
+    ast = parse_and_improve(sources)
+    ast = const_eval_nodes(ast)
+
+    got = ast.tofortran()
+    want = """
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
