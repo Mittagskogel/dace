@@ -900,7 +900,7 @@ def _dataref_root(dref: Union[Name, Data_Ref, Data_Pointer_Object], scope_spec: 
 
 def find_dataref_component_spec(dref: Union[Name, Data_Ref], scope_spec: SPEC, alias_map: SPEC_TABLE) -> SPEC:
     # The root must have been a typed object.
-    _, root_type, rest = _dataref_root(dref, scope_spec, alias_map)
+    first, root_type, rest = _dataref_root(dref, scope_spec, alias_map)
 
     cur_type = root_type
     # All component shards except for the last one must have been type objects too.
@@ -947,7 +947,9 @@ def find_indexed_dataref_component_spec(dref: Union[Name, Data_Ref],
             idx = _const_eval_basic_type(subsc_arg, alias_map)
             if not idx:
                 if allow_variable_indices:
-                    assert isinstance(subsc_arg, Name)
+                    #assert isinstance(subsc_arg, Name)
+                    if not isinstance(subsc_arg, Name):
+                        return None
                     idx = subsc_arg.string
                 else:
                     # Part_Ref did not have a constant index
@@ -968,7 +970,9 @@ def find_indexed_dataref_component_spec(dref: Union[Name, Data_Ref],
                 idx = _const_eval_basic_type(subsc_arg, alias_map)
                 if not idx:
                     if allow_variable_indices:
-                        assert isinstance(subsc_arg, Name)
+                        # assert isinstance(subsc_arg, Name)
+                        if not isinstance(subsc_arg, Name):
+                            return None
                         idx = subsc_arg.string
                     else:
                         # Part_Ref did not have a constant index
@@ -994,7 +998,9 @@ def find_indexed_dataref_component_spec(dref: Union[Name, Data_Ref],
             idx = _const_eval_basic_type(subsc_arg, alias_map)
             if not idx:
                 if allow_variable_indices:
-                    assert isinstance(subsc_arg, Name)
+                    # assert isinstance(subsc_arg, Name)
+                    if not isinstance(subsc_arg, Name):
+                        return None
                     idx = subsc_arg.string
                 else:
                     # Part_Ref did not have a constant index
@@ -2108,10 +2114,14 @@ def prune_unused_objects(ast: Program, keepers: List[SPEC]) -> Program:
                 # If it is a pointer that we have decided to remove, then clear out all of its assignments.
                 for pa in walk(ast, Pointer_Assignment_Stmt):
                     dst = pa.children[0]
-                    if not isinstance(dst, Name):
-                        # TODO: Handle data-refs.
-                        continue
-                    dst_spec = search_real_local_alias_spec(dst, alias_map)
+                    if isinstance(dst, Name):
+                        dst_spec = search_real_local_alias_spec(dst, alias_map)
+                    else:
+                        #assert(isinstance(dst, (Data_Ref, Part_Ref)))
+
+                        scope_spec = search_scope_spec(dst)
+                        assert scope_spec
+                        dst_spec = find_dataref_component_spec(dst, scope_spec, alias_map)
                     if dst_spec and alias_map[dst_spec] is ns_node:
                         remove_self(pa)
             elist = ns_node.parent
@@ -2153,9 +2163,14 @@ def prune_unused_objects(ast: Program, keepers: List[SPEC]) -> Program:
                 # then clear out all of its assignments
                 for pa in walk(ast, Pointer_Assignment_Stmt):
                     dst = pa.children[0]
-                    scope_spec = search_scope_spec(dst)
-                    assert scope_spec
-                    dst_spec = find_dataref_component_spec(dst, scope_spec, alias_map)
+                    if isinstance(dst, Name):
+                        dst_spec = search_real_local_alias_spec(dst, alias_map)
+                    else:
+                        #assert(isinstance(dst, (Data_Ref, Part_Ref)))
+
+                        scope_spec = search_scope_spec(dst)
+                        assert scope_spec
+                        dst_spec = find_dataref_component_spec(dst, scope_spec, alias_map)
                     if dst_spec and alias_map[dst_spec] is ns_node:
                         remove_self(pa)
             clist = ns_node.parent
