@@ -1844,7 +1844,10 @@ def par_Decl_Range_Finder(node: ast_internal_classes.Array_Subscript_Node,
 
                 break
 
-            struct_type = struct_def.vars[cur_node.parent_ref.name].type
+            name = cur_node.parent_ref.name
+            if isinstance(name, Name_Node):
+                name = name.name
+            struct_type = struct_def.vars[name].type
             struct_def = structures.structures[struct_type]
 
     else:
@@ -1874,11 +1877,14 @@ def par_Decl_Range_Finder(node: ast_internal_classes.Array_Subscript_Node,
                 first = True
                 if len(name_chain) >= 1:
                     for i in name_chain:
+                        name = i.name
+                        if isinstance(i.name, Name_Node):
+                            name = name.name
                         if first:
                             first = False
-                            array_name = i.name
+                            array_name = name
                         else:
-                            array_name = array_name + "_" + i.name
+                            array_name = array_name + "_" + name
                     array_name = array_name + "_" + node.name.name
                 else:
                     array_name = node.name.name
