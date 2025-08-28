@@ -1954,6 +1954,7 @@ class FortranIntrinsics:
             "RANDOM_NUMBER": "__dace_random_number",
             "DATE_AND_TIME": "__dace_date_and_time",
             "RESHAPE": "__dace_reshape",
+            "NULL": "__dace_null",
         }
 
         if func_name in replacements:

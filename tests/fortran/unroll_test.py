@@ -222,6 +222,40 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_fortran_frontend_ptr_right():
+    sources, main = SourceCodeBuilder().add_file("""
+subroutine main(d)
+  implicit none
+  type t_coeff
+    integer :: x(2,3)
+    integer :: y(2,3)
+  end type t_coeff
+  type(t_coeff), target :: coeff
+  integer, pointer :: prune(:,:), ptr
+  integer :: d, idx
+
+  prune => coeff%x
+  coeff%y = prune
+
+  do idx=1, d
+    ptr => coeff%x(1,d)
+    coeff%y(1,d) = ptr
+  end do
+
+end subroutine main
+""").check_with_gfortran().get()
+    ast = parse_and_improve(sources)
+    ast = exploit_locally_constant_variables(ast)
+    ast = const_eval_nodes(ast)
+    ast = prune_unused_objects(ast, [("main",)])
+
+    got = ast.tofortran()
+    want = """
+    """.strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 if __name__ == "__main__":
     test_fortran_frontend_loop_unroll()
     test_fortran_frontend_loop_unroll_index()
