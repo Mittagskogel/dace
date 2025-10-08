@@ -83,8 +83,11 @@ class Structures:
             if isinstance(cur_node, ast_internal_classes.Array_Subscript_Node):
                 struct_def = self.structures[struct_type]
                 cur_var = struct_def.vars[cur_node.name.name]
-                node = cur_node
-                break
+                if cur_var.type in self.structures:
+                    struct_type = cur_var.type
+                else:
+                    node = cur_node
+                    break
 
             elif isinstance(cur_node, ast_internal_classes.Name_Node):
                 struct_def = self.structures[struct_type]

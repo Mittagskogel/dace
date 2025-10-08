@@ -939,6 +939,12 @@ def find_indexed_dataref_component_spec(dref: Union[Name, Data_Ref],
 
     # Initialize idx_spec with root name
     # We don't need the full spec because it'll already be available in the root spec
+    if isinstance(root, Data_Ref):
+        idx_spec = find_indexed_dataref_component_spec(root, scope_spec,
+                                                       alias_map,
+                                                       allow_variable_indices)
+        if not idx_spec:
+            return None
     assert isinstance(root, (Name, Part_Ref))
     if isinstance(root, Part_Ref):
         part_name, subsc = root.children[0], root.children[1]

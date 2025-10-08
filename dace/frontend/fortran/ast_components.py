@@ -761,6 +761,7 @@ class InternalFortranAst:
                                               for c in specification_part.specifications if
                                               isinstance(c, Decl_Stmt_Node)
                                               for v in c.vardecl]
+            print(return_var.name)
             return_type = singular(v.type for v in var_decls if v.name == return_var.name)
 
         return ast_internal_classes.Function_Subprogram_Node(
