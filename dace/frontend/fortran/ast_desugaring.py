@@ -729,7 +729,6 @@ def _const_eval_basic_type(expr: Base, alias_map: SPEC_TABLE) -> Optional[NUMPY_
         elif intr.string in INTR_FNS:
             avals = tuple(_const_eval_basic_type(a, alias_map) for a in args)
             if all(isinstance(a, (np.float32, np.float64)) for a in avals):
-                # return np.arctan(*avals)
                 return INTR_FNS[intr.string](*avals)
         elif intr.string == 'SELECTED_REAL_KIND':
             # Probably this is not correct as it would need to detect which arg was passed.
@@ -1200,7 +1199,8 @@ def prepend_children(par: Base, children: Union[Base, List[Base]]):
 def remove_children(par: Base, children: Union[Base, List[Base]]):
     if isinstance(children, Base):
         children = [children]
-    repl = [c for c in par.children if c not in children]
+    cids = {id(c) for c in children}
+    repl = [c for c in par.children if id(c) not in cids]
     set_children(par, repl)
 
 
