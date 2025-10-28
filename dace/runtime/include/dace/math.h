@@ -603,10 +603,11 @@ namespace dace
 
         template<typename T>
         DACE_HDFI T ipow(const T& a, const unsigned int& b) {
-            T result = a;
-            for (unsigned int i = 1; i < b; ++i)
-                result *= a;
-            return result;
+            return pow(a, b);
+            // T result = a;
+            // for (unsigned int i = 1; i < b; ++i)
+            //     result *= a;
+            // return result;
         }
 
         template<typename T, typename std::enable_if<std::is_integral<T>::value>::type* = nullptr>
