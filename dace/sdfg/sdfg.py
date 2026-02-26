@@ -2410,8 +2410,8 @@ class SDFG(ControlFlowRegion):
             :return: A callable CompiledSDFG object, or None if ``return_program_handle=False``.
         """
 
-        # Importing these outside creates an import loop
-        from dace.codegen import codegen, compiler
+        # Importing this outside creates an import loop
+        from dace.codegen import compiler
 
         # Compute build folder path before running codegen
         build_folder = self.build_folder
@@ -2426,39 +2426,7 @@ class SDFG(ControlFlowRegion):
         # DaCe Compilation Process #
 
         if self.regenerate_code or not os.path.isdir(build_folder):
-            # Clone SDFG as the other modules may modify its contents
-            sdfg = copy.deepcopy(self)
-            # Fix the build folder name on the copied SDFG to avoid it changing
-            # if the codegen modifies the SDFG (thereby changing its hash)
-            sdfg.build_folder = build_folder
-
-            # Ensure external nested SDFGs are loaded.
-            for _ in sdfg.all_sdfgs_recursive(load_ext=True):
-                pass
-
-            # Rename SDFG to avoid runtime issues with clashing names
-            index = 0
-            while sdfg.is_loaded():
-                sdfg.name = f'{self.name}_{index}'
-                index += 1
-            if self.name != sdfg.name:
-                warnings.warn(f"SDFG '{self.name}' is already loaded by another object, recompiling under a different "
-                              f"name '{sdfg.name}'.")
-
-            try:
-                # Fill in scope entry/exit connectors
-                sdfg.fill_scope_connectors()
-
-                # Generate code for the program by traversing the SDFG state by state
-                program_objects = codegen.generate_code(sdfg, validate=validate)
-            except Exception:
-                fpath = os.path.join('_dacegraphs', 'failing.sdfgz')
-                self.save(fpath, compress=True)
-                print(f'Failing SDFG saved for inspection in {os.path.abspath(fpath)}')
-                raise
-
-            # Generate the program folder and write the source files
-            program_folder = compiler.generate_program_folder(sdfg, program_objects, build_folder)
+            sdfg, program_folder = self.generate_code_only(validate=validate)
         else:
             # The code was already generated, just load the program folder
             program_folder = build_folder
@@ -2476,6 +2444,51 @@ class SDFG(ControlFlowRegion):
         # Get the function handle
         if return_program_handle:
             return compiler.get_program_handle(shared_library, sdfg)
+
+    def generate_code_only(self, validate=True):
+        """Performs code generation without compiling."""
+
+        build_folder = self.build_folder
+
+        # Importing these outside creates an import loop
+        from dace.codegen import codegen, compiler
+
+        # Clone SDFG as the other modules may modify its contents
+        sdfg = copy.deepcopy(self)
+        # Fix the build folder name on the copied SDFG to avoid it changing
+        # if the codegen modifies the SDFG (thereby changing its hash)
+        sdfg.build_folder = build_folder
+
+        # Ensure external nested SDFGs are loaded.
+        for _ in sdfg.all_sdfgs_recursive(load_ext=True):
+            pass
+
+        # Rename SDFG to avoid runtime issues with clashing names
+        index = 0
+        while sdfg.is_loaded():
+            sdfg.name = f'{self.name}_{index}'
+            index += 1
+        if self.name != sdfg.name:
+            warnings.warn(f"SDFG '{self.name}' is already loaded by another object, recompiling under a different "
+                          f"name '{sdfg.name}'.")
+
+        try:
+            # Fill in scope entry/exit connectors
+            sdfg.fill_scope_connectors()
+
+            # Generate code for the program by traversing the SDFG state by state
+            program_objects = codegen.generate_code(sdfg, validate=validate)
+        except Exception:
+            fpath = os.path.join('_dacegraphs', 'failing.sdfgz')
+            self.save(fpath, compress=True)
+            print(f'Failing SDFG saved for inspection in {os.path.abspath(fpath)}')
+            raise
+
+        # Generate the program folder and write the source files
+        program_folder = compiler.generate_program_folder(sdfg, program_objects, build_folder)
+
+        return sdfg, program_folder
+
 
     def argument_typecheck(self, args, kwargs, types_only=False):
         """ Checks if arguments and keyword arguments match the SDFG
